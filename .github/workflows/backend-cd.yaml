@@ -9,8 +9,62 @@ on:
   workflow_dispatch:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: starter/backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies
+        run: pipenv install --dev
+
+      - name: Run lint
+        run: pipenv run lint
+
+  test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: starter/backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies
+        run: pipenv install --dev
+
+      - name: Run tests
+        run: pipenv run test
+
   build:
     runs-on: ubuntu-latest
+
+    needs:
+      - lint
+      - test
 
     steps:
       - name: Checkout code
@@ -34,7 +88,9 @@ jobs:
 
   push:
     runs-on: ubuntu-latest
-    needs: build
+
+    needs:
+      - build
 
     steps:
       - name: Checkout code
@@ -46,22 +102,20 @@ jobs:
           name: backend-image
 
       - name: Load Docker image
-        run: |
-          docker load -i backend-image.tar
+        run: docker load -i backend-image.tar
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag and push Docker image
+      - name: Tag Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
@@ -69,12 +123,18 @@ jobs:
             backend:${{ github.sha }} \
             $ECR_REGISTRY/backend:${{ github.sha }}
 
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
           docker push \
             $ECR_REGISTRY/backend:${{ github.sha }}
 
   deploy:
     runs-on: ubuntu-latest
-    needs: push
+
+    needs:
+      - push
 
     steps:
       - name: Checkout code
@@ -85,7 +145,6 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
           aws-region: us-east-1
 
       - name: Configure kubectl
@@ -99,10 +158,10 @@ jobs:
         run: |
           echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
-      - name: Update Kubernetes deployment
+      - name: Update Kubernetes image
         run: |
           sed -i \
-            "s|image: backend|image: ${{ steps.account.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/backend:${{ github.sha }}|" \
+            "s|image: backend.*|image: ${{ steps.account.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/backend:${{ github.sha }}|" \
             starter/backend/k8s/deployment.yaml
 
       - name: Deploy backend to EKS
