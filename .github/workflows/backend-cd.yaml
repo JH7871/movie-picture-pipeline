@@ -1,4 +1,4 @@
-name: Backend CD
+name: Backend Continuous Deployment
 
 on:
   push:
@@ -147,6 +147,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/kustomize
+
       - name: Configure kubectl
         run: |
           aws eks update-kubeconfig \
@@ -158,11 +163,11 @@ jobs:
         run: |
           echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
-      - name: Update Kubernetes image
+      - name: Update Kubernetes image with Kustomize
+        working-directory: starter/backend/k8s
         run: |
-          sed -i \
-            "s|image: backend.*|image: ${{ steps.account.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/backend:${{ github.sha }}|" \
-            starter/backend/k8s/deployment.yaml
+          kustomize edit set image \
+            backend=${{ steps.account.outputs.account_id }}.dkr.ecr.us-east-1.amazonaws.com/backend:${{ github.sha }}
 
       - name: Deploy backend to EKS
         run: |
