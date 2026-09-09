@@ -12,41 +12,49 @@ jobs:
   lint:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: starter/frontend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 16
+          node-version-file: starter/frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: starter/frontend
         run: npm ci
 
       - name: Run lint
-        working-directory: starter/frontend
         run: npm run lint
 
   test:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: starter/frontend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 16
+          node-version-file: starter/frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
 
       - name: Install dependencies
-        working-directory: starter/frontend
         run: npm ci
 
       - name: Run tests
-        working-directory: starter/frontend
         run: npm test -- --watchAll=false
 
   build:
@@ -60,10 +68,25 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: starter/frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: starter/frontend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: starter/frontend
+        run: npm test -- --watchAll=false
+
       - name: Build frontend Docker image
         run: |
           docker build \
-            --build-arg REACT_APP_MOVIE_API_URL=${{ secrets.BACKEND_API_URL }} \
+            --build-arg REACT_APP_MOVIE_API_URL="${{ secrets.BACKEND_API_URL }}" \
             -t frontend:${{ github.sha }} \
             ./starter/frontend
 
@@ -93,8 +116,7 @@ jobs:
           name: frontend-image
 
       - name: Load Docker image
-        run: |
-          docker load -i frontend-image.tar
+        run: docker load -i frontend-image.tar
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -107,12 +129,20 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Tag and push Docker image
+      - name: Tag Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker tag frontend:${{ github.sha }} $ECR_REGISTRY/frontend:${{ github.sha }}
-          docker push $ECR_REGISTRY/frontend:${{ github.sha }}
+          docker tag \
+            frontend:${{ github.sha }} \
+            $ECR_REGISTRY/frontend:${{ github.sha }}
+
+      - name: Push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push \
+            $ECR_REGISTRY/frontend:${{ github.sha }}
 
   deploy:
     runs-on: ubuntu-latest
@@ -156,3 +186,16 @@ jobs:
       - name: Deploy frontend to EKS
         run: |
           kubectl apply -k starter/frontend/k8s
+
+      - name: Verify Kubernetes deployment
+        run: |
+          kubectl rollout status deployment/frontend --timeout=180s || true
+          echo "----- Logging - kubectl get all ---- "
+          kubectl get all
+          echo "----- Logging - kubectl describe deploy ----- "
+          kubectl describe deploy frontend
+
+      - name: Verify Frontend ECR image
+        run: |
+          echo "----- Logging - Frontend ECR Image Details ----- "
+          AWS_PAGER="" aws ecr describe-images --repository-name frontend --region us-east-1 --query 'sort_by(imageDetails,&imagePushedAt)[-1].{Tags:imageTags,Digest:imageDigest,PushedAt:imagePushedAt}' --output table
